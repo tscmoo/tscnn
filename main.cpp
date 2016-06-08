@@ -538,6 +538,37 @@ struct criterion_mse {
 	}
 };
 
+struct criterion_cross_entropy {
+	a_vector<value_t> softmax_output;
+	void forward(size_t input_n, value_t* input, value_t* target, value_t* output) {
+		if (softmax_output.size() != input_n) softmax_output.resize(input_n);
+
+		value_t highest = input[0];
+		for (size_t i = 1; i < input_n; ++i) {
+			if (input[i] > highest) highest = input[i];
+		}
+		value_t sum = 0.0;
+		for (size_t i = 0; i < input_n; ++i) {
+			sum += std::exp(input[i] - highest);
+		}
+		value_t log_sum = std::log(sum);
+		for (size_t i = 0; i < input_n; ++i) {
+			softmax_output[i] = input[i] - highest - log_sum;
+		}
+
+		output[0] = 0.0;
+		for (size_t i = 0; i < input_n; ++i) {
+			output[0] += target[i] * -softmax_output[i];
+		}
+	}
+
+	void backward(size_t input_n, value_t* input, value_t* target, value_t* output) {
+		for (size_t i = 0; i < input_n; ++i) {
+			output[i] = (target[i] * (value_t)-1.0 - std::exp(softmax_output[i]) * (value_t)-1.0);
+		}
+	}
+};
+
 struct rmsprop {
 	value_t learning_rate = (value_t)0.001;
 	value_t alpha = (value_t)0.99;
@@ -655,7 +686,8 @@ int main() {
 
 	//return 0;
 
-	criterion_mse criterion;
+	//criterion_mse criterion;
+	criterion_cross_entropy criterion;
 
 	// 	value_t* input = a.get_values(all_inputs.output);
 	// 	value_t* output = a.get_values(a_output.output);
@@ -684,10 +716,10 @@ int main() {
 		}
 	}
 
-	// 	for (auto& v : weights) {
-	// 		v = 1.0;
-	// 		v = 0.99;
-	// 	}
+// 	for (auto& v : weights) {
+// 		v = 1.0;
+// 		v = 0.99;
+// 	}
 
 	log("%d weights\n", weights.size());
 
