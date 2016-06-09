@@ -5,6 +5,7 @@
 #include <memory>
 #include <functional>
 #include <vector>
+#include <stdexcept>
 
 namespace tscnn {
 
@@ -44,15 +45,14 @@ namespace tscnn {
 			a_function() : f() {};
 			a_function(std::nullptr_t) : f(nullptr) {}
 			template<typename F>
-			a_function(F&& f) : f(std::allocator_arg, allocator_T(), f) {}
+			a_function(F f) : f(std::allocator_arg, allocator_T(), f) {}
 // 			template< class F >
 // 			a_function& operator=(F&& f) {
 // 				this->f = std::forward<F>(f);
 // 				return *this;
 // 			}
-			template<typename... A>
-			R operator()(A&&... args) const {
-				return f(std::forward<A>(args)...);
+			R operator()(args_T... args) const {
+				return f(std::forward<args_T>(args)...);
 			}
 		};
 
@@ -61,6 +61,7 @@ namespace tscnn {
 
 		//a_vector<a_function<void(nn&)>> backward_construct_funcs;
 		a_vector<a_function<void(nn&)>> construct_funcs;
+		bool constructed = false;
 
 		a_vector<value_t> values;
 		size_t total_weights = 0;
@@ -84,6 +85,8 @@ namespace tscnn {
 		}
 
 		void construct() {
+			if (constructed) throw std::runtime_error("already constructed");
+			constructed = true;
 			// 		for (auto i = backward_construct_funcs.rbegin(); i != backward_construct_funcs.rend(); ++i) {
 			// 			(*i)(*this);
 			// 		}
@@ -119,9 +122,9 @@ namespace tscnn {
 
 		value_t* combine_gradients(gradients_index_ref index) {
 			auto& grads = gradients[index.index].second;
-			if (grads.empty()) xcept("missing gradients (some output is left unconnected ?)");
+			if (grads.empty()) throw std::runtime_error("missing gradients (some output is left unconnected ?)");
 			size_t size = index.size;
-			if (grads[0].first.size != size) xcept("base gradients size mismatch");
+			if (grads[0].first.size != size) throw std::runtime_error("base gradients size mismatch");
 			value_t* dst = get_values(grads[0].first);
 			if (gradient_increment_first[index.index]) {
 				for (size_t i = 1; i < grads.size(); ++i) {
@@ -141,7 +144,7 @@ namespace tscnn {
 					size_t size2 = grads[i].second.size;
 					value_t* src = get_values(grads[i].first);
 					for (size_t i2 = 0; i2 < size2; ++i2) {
-						if (std::isnan(src[i2])) xcept("combine src is nan");
+						if (std::isnan(src[i2])) throw std::runtime_error("combine src is nan");
 						dst[offset + i2] += src[i2];
 					}
 				}
@@ -186,7 +189,7 @@ namespace tscnn {
 					value_t* input_gradients = n.get_values(input_gradients_ref);
 					value_t* gradients = n.combine_gradients(gradients_index);
 					for (size_t i = 0; i < input_gradients_ref.size; ++i) {
-						if (std::isnan(gradients[i])) xcept("output gradient is nan");
+						if (std::isnan(gradients[i])) throw std::runtime_error("output gradient is nan");
 						input_gradients[i] = gradients[i];
 					}
 					parent_backward(n, in_weights, grad_in);
@@ -358,7 +361,7 @@ namespace tscnn {
 			vector_ref input_a_gradients_ref = new_gradient(input_a_unit_ref.gradients_index);
 			vector_ref input_b_ref = input_b_unit_ref.output;
 			vector_ref input_b_gradients_ref = new_gradient(input_b_unit_ref.gradients_index);
-			if (input_a_ref.size != input_b_ref.size) xcept("size mismatch");
+			if (input_a_ref.size != input_b_ref.size) throw std::runtime_error("size mismatch");
 			vector_ref output_ref = new_vector_ref(input_a_ref.size);
 			gradients_index_ref gradients_index = new_gradients_index(output_ref.size);
 			construct_funcs.push_back([input_a_ref, input_a_gradients_ref, input_b_ref, input_b_gradients_ref, output_ref, gradients_index](nn& n) {
@@ -392,7 +395,7 @@ namespace tscnn {
 			vector_ref input_a_gradients_ref = new_gradient(input_a_unit_ref.gradients_index);
 			vector_ref input_b_ref = input_b_unit_ref.output;
 			vector_ref input_b_gradients_ref = new_gradient(input_b_unit_ref.gradients_index);
-			if (input_a_ref.size != input_b_ref.size) xcept("size mismatch");
+			if (input_a_ref.size != input_b_ref.size) throw std::runtime_error("size mismatch");
 			vector_ref output_ref = new_vector_ref(input_a_ref.size);
 			gradients_index_ref gradients_index = new_gradients_index(output_ref.size);
 			construct_funcs.push_back([input_a_ref, input_a_gradients_ref, input_b_ref, input_b_gradients_ref, output_ref, gradients_index](nn& n) {
