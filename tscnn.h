@@ -512,25 +512,36 @@ namespace tscnn {
 	template<typename value_t = float, typename allocator_T = std::allocator<void>>
 	struct rmsprop {
 		value_t learning_rate = (value_t)0.001;
-		value_t alpha = (value_t)0.99;
+		value_t alpha = (value_t)0.9;
 		value_t epsilon = (value_t)1e-8;
+		value_t weight_decay = 0;
+		value_t momentum = 0;
 
-		std::vector<value_t, typename std::allocator_traits<allocator_T>::template rebind_alloc<value_t>> momentum_squared;
+		std::vector<value_t, typename std::allocator_traits<allocator_T>::template rebind_alloc<value_t>> mean_squared;
+		std::vector<value_t, typename std::allocator_traits<allocator_T>::template rebind_alloc<value_t>> current_momentum;
 
 		void operator()(value_t* weights, value_t* grad, size_t n_grad) {
-			if (momentum_squared.empty()) momentum_squared.resize(n_grad);
+			if (mean_squared.size() != n_grad) mean_squared.resize(n_grad);
+			if (current_momentum.size() != n_grad) current_momentum.resize(n_grad);
 			value_t learning_rate = this->learning_rate;
 			value_t alpha = this->alpha;
 			value_t epsilon = this->epsilon;
+			value_t weight_decay = this->weight_decay;
+			value_t momentum = this->momentum;
 			for (size_t i = 0; i < n_grad; ++i) {
-				//log("%g\n", grad[i]);
-				value_t& v = momentum_squared[i];
-				value_t g = grad[i];
+				value_t w = weights[i];
+				value_t& v = mean_squared[i];
+				value_t g = grad[i] + w * weight_decay;
 				v *= alpha;
 				v += ((value_t)1.0 - alpha) * g*g;
 				value_t m = std::sqrt(v) + epsilon;
-				weights[i] -= g / m * learning_rate;
-				//log("%g\n", weights[i]);
+				value_t adjust = g / m * learning_rate;
+
+				value_t& mom = current_momentum[i];
+				value_t prev_mom = mom;
+				mom = (mom + adjust) * momentum;
+
+				weights[i] = w - (adjust + prev_mom);
 			}
 		}
 
