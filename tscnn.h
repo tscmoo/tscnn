@@ -323,6 +323,36 @@ namespace tscnn {
 			return { output_ref, gradients_index };
 		}
 
+		unit_ref make_relu(unit_ref input_unit_ref) {
+			vector_ref input_ref = input_unit_ref.output;
+			vector_ref input_gradients_ref = new_gradient(input_unit_ref.gradients_index);
+			vector_ref output_ref = new_vector_ref(input_ref.size);
+			gradients_index_ref gradients_index = new_gradients_index(output_ref.size);
+			construct_funcs.push_back([input_ref, input_gradients_ref, output_ref, gradients_index](nn& n) {
+				auto parent_forward = n.forward;
+				n.forward = [input_ref, output_ref, parent_forward](nn& n, value_t* in_weights) {
+					parent_forward(n, in_weights);
+					value_t* input = n.get_values(input_ref);
+					value_t* output = n.get_values(output_ref);
+					for (size_t i = 0; i < output_ref.size; ++i) {
+						output[i] = input[i] < 0 ? 0 : input[i];
+					}
+				};
+				auto parent_backward = n.backward;
+				n.backward = [input_ref, input_gradients_ref, output_ref, gradients_index, parent_backward](nn& n, value_t* in_weights, value_t* grad_in) {
+					value_t* input = n.get_values(input_ref);
+					value_t* input_gradients = n.get_values(input_gradients_ref);
+					value_t* output = n.get_values(output_ref);
+					value_t* gradients = n.combine_gradients(gradients_index);
+					for (size_t i = 0; i < input_gradients_ref.size; ++i) {
+						input_gradients[i] = input[i] < 0 ? 0 : gradients[i];
+					}
+					parent_backward(n, in_weights, grad_in);
+				};
+			});
+			return { output_ref, gradients_index };
+		}
+
 		unit_ref make_select(size_t offset, size_t size, unit_ref input_unit_ref) {
 			vector_ref output_ref = input_unit_ref.output.select(offset, size);
 			gradients_index_ref gradients_index = select_gradients_index(input_unit_ref.gradients_index, offset, size);
