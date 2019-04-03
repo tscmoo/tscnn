@@ -46,7 +46,7 @@ int main() {
 
 	try {
 
-		auto a = make_feedforward_network(389, 1, 4096, 3);
+		auto a = make_feedforward_network(1024, 1024, 4096, 3);
 		auto output_gradient_ref = a.new_gradient(a.outputs[0].gradients_index);
 		a.construct();
 
@@ -170,7 +170,7 @@ int main() {
 			for (auto& v : grad) {
 				//printf("grad %g\n", v);
 			}
-			//printf("sum of grads: %g\n", std::accumulate(grad.begin(), grad.end(), 0.0f));
+			printf("sum of grads: %g\n", std::accumulate(grad.begin(), grad.end(), 0.0f));
 		}
 
 	} catch (const std::exception& e) {
