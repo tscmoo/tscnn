@@ -61,8 +61,10 @@ int main() {
 		auto cuda_target = a.new_vector_ref(1);
 		auto cuda_loss = a.new_vector_ref(1);
 
-		int batch_size = 28;
+		int batch_size = 10;
 		a.set_batch_size(batch_size);
+
+		printf("a.values.size() is %d\n", a.values.size());
 
 		auto cuda_weights = a.new_vector_ref(a.total_weights);
 
@@ -71,28 +73,30 @@ int main() {
 
 		a.allocate_cuda_values();
 
-		printf("a.values.size() is %d\n", a.values.size());
-
 		float* input = a.get_values(a.inputs[0].output);
 		float* output = a.get_values(a.outputs[0].output);
 		float* output_gradient = a.get_values(output_gradient_ref);
 
-		for (int i = 0; i != a.inputs[0].output.size; ++i) input[i] = 0;
+		for (int i = 0; i != a.inputs[0].output.size; ++i) input[i] = i + 0.75;
 
 		input[0] = 0.5f;
-		//input[1] = 2;
-		//input[2] = 3;
-		//input[3] = 4;
+		input[1] = 2;
+		input[2] = 3;
+		input[3] = 4;
 
 		auto start = std::chrono::high_resolution_clock::now();
 		for (int i = 0; i != 100; ++i) a.forward(a, weights.data());
 		auto t = std::chrono::duration_cast<std::chrono::duration<float, std::ratio<1, 1000>>>(std::chrono::high_resolution_clock::now() - start).count();
 		printf("forward took %gms\n", t);
 
-		printf("cpu output: %g\n", output[0]);
+		for (size_t i2 = 0; i2 != a.outputs[0].output.size; ++i2) {
+			printf("cpu output: %g\n", output[i2]);
+		}
 
 		float target = 1.0f;
 		float loss = 0.0f;
+
+		for (int i = 0; i != output_gradient_ref.size; ++i) output_gradient[i] = 0;
 
 		//output_gradient[0] = -1.0f;
 		criterion.forward(1, output, &target, &loss);
@@ -131,7 +135,9 @@ int main() {
 		for (int i = 0; i != batch_size; ++i) {
 			a.copy_to_cpu(a.outputs[0].output, output, i);
 
-			printf("cuda output: %g\n", output[0]);
+			for (size_t i2 = 0; i2 != a.outputs[0].output.size; ++i2) {
+				//printf("cuda output: %g\n", output[i2]);
+			}
 			output[0]++;
 		}
 
@@ -153,7 +159,7 @@ int main() {
 			a.copy_to_cpu(output_gradient_ref, output_gradient, i);
 			a.copy_to_cpu(a.outputs[0].output, output, i);
 
-			printf("cuda loss: %g  gradient: %g\n", loss, output_gradient[0]);
+			//printf("cuda loss: %g  gradient: %g\n", loss, output_gradient[0]);
 
 			printf("cuda output: %g\n", output[0]);
 			output[0]++;
@@ -164,7 +170,7 @@ int main() {
 			for (auto& v : grad) {
 				//printf("grad %g\n", v);
 			}
-			printf("sum of grads: %g\n", std::accumulate(grad.begin(), grad.end(), 0.0f));
+			//printf("sum of grads: %g\n", std::accumulate(grad.begin(), grad.end(), 0.0f));
 		}
 
 	} catch (const std::exception& e) {
