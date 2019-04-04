@@ -1,5 +1,4 @@
-#ifndef STRF_H
-#define STRF_H
+#pragma once
 
 #include <cstring>
 #include <string>
@@ -443,5 +442,3 @@ namespace strf {
 	}
 
 }
-
-#endif
