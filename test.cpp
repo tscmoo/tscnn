@@ -31,7 +31,8 @@ nn<float> make_feedforward_network(size_t inputs, size_t outputs, size_t hidden_
 
 	unit_ref h = in;
 	for (size_t i = 0; i < hidden_layers; ++i) {
-		h = r.make_tanh(r.make_linear(hidden_size, h));
+		//h = r.make_tanh(r.make_linear(hidden_size, h));
+		h = r.make_relu(r.make_linear(hidden_size, h));
 		//h = r.make_linear(hidden_size, h);
 	}
 
@@ -46,7 +47,7 @@ int main() {
 
 	try {
 
-		auto a = make_feedforward_network(1024, 1024, 4096, 3);
+		auto a = make_feedforward_network(4096, 4096, 4096, 3);
 		auto output_gradient_ref = a.new_gradient(a.outputs[0].gradients_index);
 		a.construct();
 
@@ -58,7 +59,7 @@ int main() {
 		std::vector<float> grad(a.total_weights);
 
 		auto cuda_grad = a.new_vector_ref(a.total_weights);
-		auto cuda_target = a.new_vector_ref(1);
+		auto cuda_target = a.new_vector_ref(a.outputs[0].output.size);
 		auto cuda_loss = a.new_vector_ref(1);
 
 		int batch_size = 10;
@@ -90,24 +91,34 @@ int main() {
 		printf("forward took %gms\n", t);
 
 		for (size_t i2 = 0; i2 != a.outputs[0].output.size; ++i2) {
-			printf("cpu output: %g\n", output[i2]);
+			//printf("cpu output: %g\n", output[i2]);
 		}
 
-		float target = 1.0f;
+		std::vector<float> target;
+		target.resize(a.outputs[0].output.size);
 		float loss = 0.0f;
+
+		for (int i = 0; i != a.outputs[0].output.size; ++i) {
+			target[i] = i + 0.5f;
+		}
 
 		for (int i = 0; i != output_gradient_ref.size; ++i) output_gradient[i] = 0;
 
 		//output_gradient[0] = -1.0f;
-		criterion.forward(1, output, &target, &loss);
+		criterion.forward(1, output, target.data(), &loss);
 
 		printf("loss %g\n", loss);
 
-		criterion.backward(1, output, &target, output_gradient);
+		criterion.backward(target.size(), output, target.data(), output_gradient);
 
-		printf("output_gradient %g\n", output_gradient[0]);
+		for (int i = 0; i != a.outputs[0].output.size; ++i) {
+			//printf("output_gradient %g\n", output_gradient[i]);
+		}
 
-		a.backward(a, weights.data(), grad.data());
+		start = std::chrono::high_resolution_clock::now();
+		for (int i = 0; i != 100; ++i) a.backward(a, weights.data(), grad.data());
+		t = std::chrono::duration_cast<std::chrono::duration<float, std::ratio<1, 1000>>>(std::chrono::high_resolution_clock::now() - start).count();
+		printf("backward took %gms\n", t);
 
 		for (auto& v : grad) {
 			//printf("grad %g\n", v);
@@ -144,13 +155,15 @@ int main() {
 		for (int i = 0; i != batch_size; ++i) {
 			output_gradient[0] = -1.0f;
 			a.copy_to_cuda(output_gradient, output_gradient_ref, i);
-			a.copy_to_cuda(&target, cuda_target, 0);
+			a.copy_to_cuda(target.data(), cuda_target, i);
 			a.cuda_memset(cuda_grad, 0, i);
 		}
 
 		start = std::chrono::high_resolution_clock::now();
-		a.cuda_forward_backward(a, cuda_weights, cuda_grad, a.outputs[0].output, 1, cuda_target, cuda_loss, output_gradient_ref, batch_size);
-		a.cuda_synchronize();
+		for (int i = 0; i != 100; ++i) {
+			a.cuda_forward_backward(a, cuda_weights, cuda_grad, a.outputs[0].output, target.size(), cuda_target, cuda_loss, output_gradient_ref, batch_size);
+			a.cuda_synchronize();
+		}
 		t = std::chrono::duration_cast<std::chrono::duration<float, std::ratio<1, 1000>>>(std::chrono::high_resolution_clock::now() - start).count();
 		printf("cuda forward_backward took %gms\n", t);
 
@@ -159,9 +172,14 @@ int main() {
 			a.copy_to_cpu(output_gradient_ref, output_gradient, i);
 			a.copy_to_cpu(a.outputs[0].output, output, i);
 
-			//printf("cuda loss: %g  gradient: %g\n", loss, output_gradient[0]);
+			printf("cuda loss: %g\n", loss);
+			for (int i = 0; i != output_gradient_ref.size; ++i) {
+				//printf(" gradient: %g\n", output_gradient[i]);
+			}
 
-			printf("cuda output: %g\n", output[0]);
+			for (int i = 0; i != a.outputs[0].output.size; ++i) {
+				//printf("cuda output: %g\n", output[i]);
+			}
 			output[0]++;
 		}
 

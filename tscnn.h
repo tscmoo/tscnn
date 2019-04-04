@@ -147,7 +147,7 @@ static void check_cu_debug(CUresult err, const char* file, int line) {
 		vector_ref new_fake_vector_ref(size_t size) {
 			size_t offset = values.size() + fake_values_size;
 			fake_values_size += size;
-			return { offset, size };
+			return { offset, size, true };
 		}
 
 		std::vector<vector_ref> cuda_vars;
@@ -158,7 +158,6 @@ static void check_cu_debug(CUresult err, const char* file, int line) {
 			cuda_value_var[ref.offset] = name;
 			cuda_vars.push_back(ref);
 			cuda_var_last_use[ref.offset] = cuda_vars.size() - 1;
-			//printf("set cuda value %d %d  %s  last use %d\n", ref.offset, ref.size, name.c_str(), cuda_var_last_use[ref.offset]);
 			return format("value_t* __restrict__ %s = ${VAR_%d};${SYNC_VAR_%d}\n", name, ref.offset, ref.offset);
 		}
 
@@ -166,7 +165,6 @@ static void check_cu_debug(CUresult err, const char* file, int line) {
 			if (allow_var) {
 				auto i = cuda_value_var.find(ref.offset);
 				if (i != cuda_value_var.end()) {
-					//printf("get cuda value %d %d  %s  last use %d\n", ref.offset, ref.size, i->second.c_str(), cuda_var_last_use[ref.offset]);
 					cuda_var_last_use[ref.offset] = cuda_vars.size() - 1;
 					return i->second;
 				}
@@ -196,13 +194,11 @@ static void check_cu_debug(CUresult err, const char* file, int line) {
 					size_t to= std::get<1>(*it);
 					size_t offset = std::get<2>(*it);
 					if (cuda_var_last_use[offset] < ci) {
-						//printf("free [%d,%d) because %d <= %d\n", from, to, cuda_var_last_use[offset], ci);
 						it = allocated.erase(it);
 						removed_something = true;
 						continue;
 					}
 					if (from - i >= v.size) {
-						//printf("allocate %d to [%d,%d)\n", offset, i, i + v.size);
 						allocated.emplace(it, i, i + v.size, v.offset);
 						replacements.emplace_back(format("${VAR_%d}", v.offset), format("(&vars[%d])", i));
 						replacements.emplace_back(format("${SYNC_VAR_%d}", v.offset), removed_something ? "__syncthreads();" : "");
@@ -213,12 +209,11 @@ static void check_cu_debug(CUresult err, const char* file, int line) {
 					++it;
 				}
 				if (i != -1) {
-					if (i + v.size > 1024 * 48 / sizeof(value_t)) {
+					if (!v.fake && i + v.size > cuda_max_shared_memory / sizeof(value_t)) {
 						replacements.emplace_back(format("${VAR_%d}", v.offset), gen_cuda_get_values(v, false));
 						replacements.emplace_back(format("${SYNC_VAR_%d}", v.offset), removed_something ? "__syncthreads();" : "");
 					} else {
 						size = std::max(size, i + v.size);
-						//printf("allocate %d to [%d,%d)\n", v.offset, i, i + v.size);
 						allocated.emplace_back(i, i + v.size, v.offset);
 						replacements.emplace_back(format("${VAR_%d}", v.offset), format("&vars[%d]", i));
 						replacements.emplace_back(format("${SYNC_VAR_%d}", v.offset), removed_something ? "__syncthreads();" : "");
@@ -279,7 +274,7 @@ static void check_cu_debug(CUresult err, const char* file, int line) {
 			str += "int thread_index = threadIdx.x;\n";
 			str += "int warp_index= thread_index % " + std::to_string(cuda_warp_size) + ";\n";
 			str += "int batch_index = blockIdx.x;\n";
-			str += "values += " + std::to_string(values_batch_size) + " * blockIdx.x;\n";
+			str += "values += " + std::to_string(values_batch_size) + " * batch_index;\n";
 			reset_cuda_gen();
 			str += "${SHARED_MEM}";
 			str += gen_cuda_forward(*this, cuda_threads);
@@ -503,7 +498,7 @@ static void check_cu_debug(CUresult err, const char* file, int line) {
 
 					str += replace(R"(
 					{
-						value_t* input_gradients = $input_gradients;
+						value_t* __restrict__ input_gradients = $input_gradients;
 						$combine_gradients
 						for (size_t i = thread_index; i < $input_size; i += $threads) {
 							input_gradients[i] = gradients[i];
@@ -596,11 +591,6 @@ static void check_cu_debug(CUresult err, const char* file, int line) {
 
 					str += n.cuda_check_sync();
 
-					std::string red_str;
-					for (int i = 0, b = 1; b < n.cuda_warp_size; ++i, b *= 2) {
-						red_str += "red(" + std::to_string(b) + ");";
-					}
-
 					str += replace(R"(
 					{
 						const value_t* __restrict__ input = $input;
@@ -609,35 +599,6 @@ static void check_cu_debug(CUresult err, const char* file, int line) {
 						const int output_size = $output_size;
 						const value_t* __restrict__ bias_w = in_weights + $weights_offset;
 						const value_t* __restrict__ w = bias_w + output_size;
-
-//						bias_w += thread_index;
-//						w += $input_size * thread_index;
-//						for (size_t oi = thread_index; oi < output_size; oi += $threads, bias_w += $threads - 1, w += ($threads - 1) * input_size) {
-//							value_t sum = *bias_w++;
-//							for (size_t ii = 0; ii < input_size; ++ii) {
-//								sum += input[ii] * *w++;
-//							}
-//							output[oi] = sum;
-//						}
-
-//						const unsigned long mask = 0xffffffff;
-//						for (int ofi = 0; ofi != $outputs_per_block_thread; ++ofi) {
-//							value_t result = 0;
-//							int output_window_offset = ofi * ($threads * $input_size);
-//							for (int ii = 0; ii != $inputs_per_warp_thread; ++ii) {
-//								int input_window_offset = $warp_size * ii;
-//								value_t in = input[$warp_size * ii + warp_index];
-//								//asm("prefetch.global.L1 [%0];" :: "l"(&w[output_window_offset + thread_index * $input_size + input_window_offset + $warp_size]));
-//								for (int oi = 0; oi != $warp_size; ++oi) {
-//									//value_t weight = w[output_window_offset + thread_index * $input_size + input_window_offset + oi];
-//									//value_t weight;
-//									//asm("ld.global.cs.f32 %0, [%1];" : "=f"(weight) : "l"(&w[output_window_offset + thread_index * $input_size + input_window_offset + oi]));
-//									//result += __shfl_sync(mask, in, oi) * weight;
-//									result += __shfl_sync(mask, in, oi) * w[output_window_offset + thread_index * $input_size + input_window_offset + oi];
-//								}
-//							}
-//							output[ofi  * $threads + thread_index] = result + bias_w[ofi  * $threads + thread_index];
-//						}
 
 						const unsigned long mask = 0xffffffff;
 						for (int ofi = 0; ofi != $outputs_per_block_thread; ++ofi) {
@@ -692,23 +653,66 @@ static void check_cu_debug(CUresult err, const char* file, int line) {
 						size_t input_size = $input_size;
 						size_t output_size = $output_size;
 						value_t* __restrict__ w = in_weights + $weights_offset + output_size;
-						w += thread_index;
-						for (size_t ii = thread_index; ii < input_size; ii += $threads) {
-							input_gradients[ii] = 0;
-							for (size_t oi = 0; oi < output_size; ++oi) {
-								input_gradients[ii] += gradients[oi] * *w++;
-							}
-						}
 						value_t* __restrict__ bias_g = grad_in + $weights_offset;
 						value_t* __restrict__ g = bias_g + output_size;
-						bias_g += thread_index;
-						g += $input_size * thread_index;
-						for (size_t oi = thread_index; oi < output_size; oi += $threads, bias_g += $threads - 1, g += ($threads - 1) * input_size) {
-							*bias_g++ += gradients[oi];
-							for (size_t ii = 0; ii < input_size; ++ii) {
-								*g++ += gradients[oi] * input[ii];
+						const unsigned long mask = 0xffffffff;
+						for (int ofi = 0; ofi != $outputs_per_block_thread; ++ofi) {
+							value_t grad = gradients[ofi  * $threads + thread_index];
+							bias_g[ofi  * $threads + thread_index] += grad;
+							for (int ii = 0; ii != $inputs_per_warp_thread; ++ii) {
+								value_t in = input[$warp_size * ii + warp_index];
+								value_t gc[$warp_size];
+								for (int oi = 0; oi != $warp_size; ++oi) {
+									gc[oi] = g[($warp_size * ii + oi) * $output_size + (ofi  * $threads + thread_index)];
+								}
+								for (int oi = 0; oi != $warp_size; ++oi) {
+									value_t gv = grad * __shfl_sync(mask, in, oi);
+									g[($warp_size * ii + oi) * $output_size + (ofi  * $threads + thread_index)] = gc[oi] + gv;
+								}
 							}
 						}
+
+						for (int ifi = 0; ifi != $inputs_per_block_thread; ++ifi) {
+							value_t result = 0;
+							for (int ofi = 0; ofi != $outputs_per_warp_thread; ++ofi) {
+								value_t grad = gradients[ofi  * $warp_size + warp_index];
+								value_t wc[$warp_size];
+								for (int oi = 0; oi != $warp_size; ++oi) {
+									wc[oi] = w[($threads * ifi + thread_index) * $output_size + (ofi  * $warp_size + oi)];
+								}
+								for (int oi = 0; oi != $warp_size; ++oi) {
+									result += __shfl_sync(mask, grad, oi) * wc[oi];
+								}
+							}
+							input_gradients[$threads * ifi + thread_index] = result;
+						}
+
+//						for (int i = thread_index; i < $input_size; i += $threads) {
+//							input_gradients[i] = 0;
+//						}
+//						__syncthreads();
+//						const unsigned long mask = 0xffffffff;
+//						for (int ofi = 0; ofi != $outputs_per_block_thread; ++ofi) {
+//							value_t result = 0;
+//							value_t grad = gradients[ofi  * $threads + thread_index];
+//							bias_g[ofi  * $threads + thread_index] += grad;
+//							for (int ii = 0; ii != $inputs_per_warp_thread; ++ii) {
+//								value_t in = input[$warp_size * ii + warp_index];
+//								value_t wc[$warp_size];
+//								value_t gc[$warp_size];
+//								for (int oi = 0; oi != $warp_size; ++oi) {
+//									wc[oi] = w[($warp_size * ii + oi) * $output_size + (ofi  * $threads + thread_index)];
+//									gc[oi] = g[($warp_size * ii + oi) * $output_size + (ofi  * $threads + thread_index)];
+//								}
+//								for (int oi = 0; oi != $warp_size; ++oi) {
+//									value_t weight = wc[oi];
+//									value_t ig = grad * weight;
+//									value_t gv = grad * __shfl_sync(mask, in, oi);
+//									g[($warp_size * ii + oi) * $output_size + (ofi  * $threads + thread_index)] = gc[oi] + gv;
+//									atomicAdd(&input_gradients[$warp_size * ii + oi], ig);
+//								}
+//							}
+//						}
 					}
 					)",
 					{
@@ -718,7 +722,12 @@ static void check_cu_debug(CUresult err, const char* file, int line) {
 						{"$input_size", std::to_string(input_ref.size)},
 						{"$output_size", std::to_string(output_ref.size)},
 						{"$weights_offset", std::to_string(weights_offset)},
-						{"$combine_gradients", n.gen_cuda_combine_gradients(gradients_index)}
+						{"$combine_gradients", n.gen_cuda_combine_gradients(gradients_index)},
+						{"$warp_size", std::to_string(n.cuda_warp_size)},
+						{"$outputs_per_block_thread", std::to_string((output_ref.size + n.cuda_threads - 1) / n.cuda_threads)},
+						{"$inputs_per_warp_thread", std::to_string((input_ref.size + n.cuda_warp_size - 1) / n.cuda_warp_size)},
+						{"$inputs_per_block_thread", std::to_string((input_ref.size + n.cuda_threads - 1) / n.cuda_threads)},
+						{"$outputs_per_warp_thread", std::to_string((output_ref.size + n.cuda_warp_size - 1) / n.cuda_warp_size)},
 					});
 
 					n.cuda_set_sync();
@@ -935,7 +944,6 @@ static void check_cu_debug(CUresult err, const char* file, int line) {
 					}
 					)",
 					{
-						{"$outval", outval},
 						{"$threads", std::to_string(cuda_threads)},
 						{"$input", n.gen_cuda_get_values(input_ref)},
 						{"$output", n.gen_cuda_get_values(output_ref)},
@@ -960,6 +968,7 @@ static void check_cu_debug(CUresult err, const char* file, int line) {
 					}
 					)",
 					{
+						{"$threads", std::to_string(cuda_threads)},
 						{"$input", n.gen_cuda_get_values(input_ref)},
 						{"$input_gradients", n.gen_cuda_get_values(input_gradients_ref)},
 						{"$input_size", std::to_string(input_ref.size)},
@@ -1180,6 +1189,8 @@ static void check_cu_debug(CUresult err, const char* file, int line) {
 			check_cu(cuDeviceGetAttribute(&cuda_warp_size, CU_DEVICE_ATTRIBUTE_WARP_SIZE, cuDevice));
 			check_cu(cuDeviceGetAttribute(&cuda_max_shared_memory, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK, cuDevice));
 
+			if (cuda_warp_size > cuda_threads) cuda_warp_size = cuda_threads;
+
 			std::string src = gen_cuda_forward_kernel() + "\n\n";
 			src += gen_cuda_forward_backward_kernel(criterion);
 
@@ -1338,10 +1349,10 @@ static void check_cu_debug(CUresult err, const char* file, int line) {
 
 			str += replace(R"(
 			{
-				value_t* input = criterion_input;
+				value_t* __restrict__ input = criterion_input;
 				int input_size = criterion_input_size;
-				value_t* target = criterion_target;
-				value_t* output = criterion_gradient;
+				value_t* __restrict__ target = criterion_target;
+				value_t* __restrict__ output = criterion_gradient;
 				value_t n = (value_t)2.0 / input_size;
 				for (size_t i = thread_index; i < input_size; i += $threads) {
 					output[i] = (input[i] - target[i]) * n;
