@@ -1197,7 +1197,7 @@ static void check_cu_debug(CUresult err, const char* file, int line) {
 			if (!cuda_src_override.empty()) src = cuda_src_override;
 
 			nvrtcProgram prog;
-			printf("compiling '%s'\n", src.c_str());
+			//printf("compiling '%s'\n", src.c_str());
 			check_nvrtc(nvrtcCreateProgram(&prog, src.c_str(), nullptr, 0, nullptr, nullptr));
 
 			std::vector<std::string> ops;
@@ -1209,7 +1209,7 @@ static void check_cu_debug(CUresult err, const char* file, int line) {
 			for (auto& v : ops) opss.push_back(v.data());
 			auto err = nvrtcCompileProgram(prog, opss.size(), opss.data());
 
-			printf("%s\n", src.c_str());
+			//printf("%s\n", src.c_str());
 
 			if (err != NVRTC_SUCCESS) {
 				printf("failed to compile '%s'\n", src.c_str());
@@ -1229,9 +1229,9 @@ static void check_cu_debug(CUresult err, const char* file, int line) {
 			ptx.resize(ptx_size);
 			check_nvrtc(nvrtcGetPTX(prog, ptx.data()));
 
-			FILE* f = fopen("out.ptx", "wb");
-			fwrite(ptx.data(), ptx.size(), 1, f);
-			fclose(f);
+//			FILE* f = fopen("out.ptx", "wb");
+//			fwrite(ptx.data(), ptx.size(), 1, f);
+//			fclose(f);
 
 			check_nvrtc(nvrtcDestroyProgram(&prog));
 
