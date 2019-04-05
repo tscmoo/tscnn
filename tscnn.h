@@ -1329,11 +1329,13 @@ static void check_cu_debug(CUresult err, const char* file, int line) {
 					int input_size = criterion_input_size;
 					value_t* target = criterion_target;
 					value_t sum = 0.0;
+					int n = 0;
 					for (size_t i = 0; i < input_size; ++i) {
-						value_t diff = target[i] - input[i];
+						n += isfinite(target[i]) ? 1 : 0;
+						value_t diff = isfinite(target[i]) ? target[i] - input[i] : 0;
 						sum += diff*diff;
 					}
-					criterion_loss[batch_index] = sum / input_size;
+					criterion_loss[0] = sum / n;
 				}
 			}
 			)",
@@ -1355,7 +1357,7 @@ static void check_cu_debug(CUresult err, const char* file, int line) {
 				value_t* __restrict__ output = criterion_gradient;
 				value_t n = (value_t)2.0 / input_size;
 				for (size_t i = thread_index; i < input_size; i += $threads) {
-					output[i] = (input[i] - target[i]) * n;
+					output[i] = isfinite(target[i]) ? (input[i] - target[i]) * n : 0;
 				}
 			}
 			)",
