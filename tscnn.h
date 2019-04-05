@@ -1345,6 +1345,7 @@ static void check_cu_debug(CUresult err, const char* file, int line) {
 					}
 					criterion_loss[0] = sum / n;
 				}
+				__syncthreads();
 			}
 			)",
 			{
