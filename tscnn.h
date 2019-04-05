@@ -14,6 +14,8 @@
 #include <stdexcept>
 #include <random>
 #include <unordered_map>
+#include <array>
+#include <cmath>
 
 namespace tscnn {
 
@@ -296,7 +298,6 @@ static void check_cu_debug(CUresult err, const char* file, int line) {
 			str += "int warp_index= thread_index % " + std::to_string(cuda_warp_size) + ";\n";
 			str += "int batch_index = blockIdx.x;\n";
 			str += "values += " + std::to_string(values_batch_size) + " * batch_index;\n";
-			str += "grad_in += " + std::to_string(values_batch_size) + " * batch_index;\n";
 			str += "criterion_input += " + std::to_string(values_batch_size) + " * batch_index;\n";
 			str += "criterion_target += " + std::to_string(values_batch_size) + " * batch_index;\n";
 			str += "criterion_loss += " + std::to_string(values_batch_size) + " * batch_index;\n";
@@ -655,64 +656,67 @@ static void check_cu_debug(CUresult err, const char* file, int line) {
 						value_t* __restrict__ w = in_weights + $weights_offset + output_size;
 						value_t* __restrict__ bias_g = grad_in + $weights_offset;
 						value_t* __restrict__ g = bias_g + output_size;
-						const unsigned long mask = 0xffffffff;
-						for (int ofi = 0; ofi != $outputs_per_block_thread; ++ofi) {
-							value_t grad = gradients[ofi  * $threads + thread_index];
-							bias_g[ofi  * $threads + thread_index] += grad;
-							for (int ii = 0; ii != $inputs_per_warp_thread; ++ii) {
-								value_t in = input[$warp_size * ii + warp_index];
-								value_t gc[$warp_size];
-								for (int oi = 0; oi != $warp_size; ++oi) {
-									gc[oi] = g[($warp_size * ii + oi) * $output_size + (ofi  * $threads + thread_index)];
-								}
-								for (int oi = 0; oi != $warp_size; ++oi) {
-									value_t gv = grad * __shfl_sync(mask, in, oi);
-									g[($warp_size * ii + oi) * $output_size + (ofi  * $threads + thread_index)] = gc[oi] + gv;
-								}
-							}
-						}
-
-						for (int ifi = 0; ifi != $inputs_per_block_thread; ++ifi) {
-							value_t result = 0;
-							for (int ofi = 0; ofi != $outputs_per_warp_thread; ++ofi) {
-								value_t grad = gradients[ofi  * $warp_size + warp_index];
-								value_t wc[$warp_size];
-								for (int oi = 0; oi != $warp_size; ++oi) {
-									wc[oi] = w[($threads * ifi + thread_index) * $output_size + (ofi  * $warp_size + oi)];
-								}
-								for (int oi = 0; oi != $warp_size; ++oi) {
-									result += __shfl_sync(mask, grad, oi) * wc[oi];
-								}
-							}
-							input_gradients[$threads * ifi + thread_index] = result;
-						}
-
-//						for (int i = thread_index; i < $input_size; i += $threads) {
-//							input_gradients[i] = 0;
-//						}
-//						__syncthreads();
 //						const unsigned long mask = 0xffffffff;
 //						for (int ofi = 0; ofi != $outputs_per_block_thread; ++ofi) {
-//							value_t result = 0;
 //							value_t grad = gradients[ofi  * $threads + thread_index];
-//							bias_g[ofi  * $threads + thread_index] += grad;
+//							atomicAdd(&bias_g[ofi  * $threads + thread_index], grad);
 //							for (int ii = 0; ii != $inputs_per_warp_thread; ++ii) {
 //								value_t in = input[$warp_size * ii + warp_index];
-//								value_t wc[$warp_size];
 //								value_t gc[$warp_size];
 //								for (int oi = 0; oi != $warp_size; ++oi) {
-//									wc[oi] = w[($warp_size * ii + oi) * $output_size + (ofi  * $threads + thread_index)];
 //									gc[oi] = g[($warp_size * ii + oi) * $output_size + (ofi  * $threads + thread_index)];
 //								}
 //								for (int oi = 0; oi != $warp_size; ++oi) {
-//									value_t weight = wc[oi];
-//									value_t ig = grad * weight;
 //									value_t gv = grad * __shfl_sync(mask, in, oi);
-//									g[($warp_size * ii + oi) * $output_size + (ofi  * $threads + thread_index)] = gc[oi] + gv;
-//									atomicAdd(&input_gradients[$warp_size * ii + oi], ig);
+//									//atomicAdd(&g[($warp_size * ii + oi) * $output_size + (ofi  * $threads + thread_index)], gv);
+//									//g[($warp_size * ii + oi) * $output_size + (ofi  * $threads + thread_index)] = gc + gv;
 //								}
 //							}
 //						}
+
+//						for (int ifi = 0; ifi != $inputs_per_block_thread; ++ifi) {
+//							value_t result = 0;
+//							for (int ofi = 0; ofi != $outputs_per_warp_thread; ++ofi) {
+//								value_t grad = gradients[ofi  * $warp_size + warp_index];
+//								value_t wc[$warp_size];
+//								for (int oi = 0; oi != $warp_size; ++oi) {
+//									wc[oi] = w[($threads * ifi + thread_index) * $output_size + (ofi  * $warp_size + oi)];
+//								}
+//								for (int oi = 0; oi != $warp_size; ++oi) {
+//									result += __shfl_sync(mask, grad, oi) * wc[oi];
+//								}
+//							}
+//							//input_gradients[$threads * ifi + thread_index] = result;
+//						}
+
+						for (int i = thread_index; i < $input_size; i += $threads) {
+							input_gradients[i] = 0;
+						}
+						__syncthreads();
+						const unsigned long mask = 0xffffffff;
+						for (int ofi = 0; ofi != $outputs_per_block_thread; ++ofi) {
+							value_t result = 0;
+							value_t grad = gradients[ofi  * $threads + thread_index];
+							//bias_g[ofi  * $threads + thread_index] += grad;
+							atomicAdd(&bias_g[ofi  * $threads + thread_index], grad);
+							for (int ii = 0; ii != $inputs_per_warp_thread; ++ii) {
+								value_t in = input[$warp_size * ii + warp_index];
+								value_t wc[$warp_size];
+								//value_t gc[$warp_size];
+								for (int oi = 0; oi != $warp_size; ++oi) {
+									wc[oi] = w[($warp_size * ii + oi) * $output_size + (ofi  * $threads + thread_index)];
+									//gc[oi] = g[($warp_size * ii + oi) * $output_size + (ofi  * $threads + thread_index)];
+								}
+								for (int oi = 0; oi != $warp_size; ++oi) {
+									value_t weight = wc[oi];
+									value_t ig = grad * weight;
+									value_t gv = grad * __shfl_sync(mask, in, oi);
+									//g[($warp_size * ii + oi) * $output_size + (ofi  * $threads + thread_index)] = gc[oi] + gv;
+									atomicAdd(&g[($warp_size * ii + oi) * $output_size + (ofi  * $threads + thread_index)], gv);
+									atomicAdd(&input_gradients[$warp_size * ii + oi], ig);
+								}
+							}
+						}
 					}
 					)",
 					{
@@ -1303,17 +1307,21 @@ static void check_cu_debug(CUresult err, const char* file, int line) {
 	struct criterion_mse {
 		void forward(size_t input_n, value_t* input, value_t* target, value_t* output) {
 			value_t sum = 0.0;
+			int n = 0;
 			for (size_t i = 0; i < input_n; ++i) {
-				value_t diff = target[i] - input[i];
-				sum += diff*diff;
+				if (std::isfinite(target[i])) {
+					++n;
+					value_t diff = target[i] - input[i];
+					sum += diff*diff;
+				}
 			}
-			output[0] = sum / input_n;
+			output[0] = sum / n;
 		}
 
 		void backward(size_t input_n, value_t* input, value_t* target, value_t* output) {
 			value_t n = (value_t)2.0 / input_n;
 			for (size_t i = 0; i < input_n; ++i) {
-				output[i] = (input[i] - target[i]) * n;
+				output[i] = std::isfinite(target[i]) ? (input[i] - target[i]) * n : 0;
 			}
 		}
 
