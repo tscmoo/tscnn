@@ -1315,7 +1315,7 @@ static void check_cu_debug(CUresult err, const char* file, int line) {
 					sum += diff*diff;
 				}
 			}
-			output[0] = sum / n;
+			if (n != 0) output[0] = sum / n;
 		}
 
 		void backward(size_t input_n, value_t* input, value_t* target, value_t* output) {
@@ -1339,11 +1339,13 @@ static void check_cu_debug(CUresult err, const char* file, int line) {
 					value_t sum = 0.0;
 					int n = 0;
 					for (size_t i = 0; i < input_size; ++i) {
-						n += isfinite(target[i]) ? 1 : 0;
-						value_t diff = isfinite(target[i]) ? target[i] - input[i] : 0;
-						sum += diff*diff;
+						if (isfinite(target[i])) {
+							++n;
+							value_t diff = target[i] - input[i];
+							sum += diff*diff;
+						}
 					}
-					criterion_loss[0] = sum / n;
+					if (n != 0) criterion_loss[0] = sum / n;
 				}
 				__syncthreads();
 			}
