@@ -32,8 +32,8 @@ static void check_cu_debug(CUresult err, const char* file, int line) {
 	throw std::runtime_error(std::string(file) + ":" + std::to_string(line) + ": " + std::string("cuda error ") + str);
 }
 
-#define check_nvrtc(x) check_nvrtc_debug(x, __FILE__, __LINE__);
-#define check_cu(x) check_cu_debug(x, __FILE__, __LINE__);
+#define check_nvrtc(x) check_nvrtc_debug(x, __FILE__, __LINE__)
+#define check_cu(x) check_cu_debug(x, __FILE__, __LINE__)
 
 #endif
 
@@ -1175,18 +1175,37 @@ static void check_cu_debug(CUresult err, const char* file, int line) {
 		CUcontext context;
 		CUmodule module;
 
+		bool cuda_inited = false;
+
 		void set_device_context() {
 			check_cu(cuCtxSetCurrent(context));
 		}
 
 		std::string cuda_src_override;
 
+		int cuda_device_count() {
+			if (!cuda_inited) check_cu(cuInit(0)), cuda_inited = true;
+			int r = 0;
+			check_cu(cuDeviceGetCount(&r));
+			return r;
+		}
+
+		std::string cuda_device_name(int n) {
+			if (!cuda_inited) check_cu(cuInit(0)), cuda_inited = true;
+			char buf[0x100];
+			CUdevice cud;
+			check_cu(cuDeviceGet(&cud, n));
+			check_cu(cuDeviceGetName(buf, 255, cud));
+			buf[0xff] = 0;
+			return buf;
+		}
+
 		CUfunction kernel_forward;
 		CUfunction kernel_forward_backward;
 		template<typename criterion_T>
-		void make_cuda_kernels(criterion_T&& criterion) {
-			check_cu(cuInit(0));
-			check_cu(cuDeviceGet(&cuDevice, 0));
+		void make_cuda_kernels(criterion_T&& criterion, int device_index = 0) {
+			if (!cuda_inited) check_cu(cuInit(0)), cuda_inited = true;
+			check_cu(cuDeviceGet(&cuDevice, device_index));
 			check_cu(cuDevicePrimaryCtxRetain(&context, cuDevice));
 			set_device_context();
 
